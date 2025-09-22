@@ -10,7 +10,7 @@
 MODEL_PATH="path/to/your/resnet50_latest.pth"
 
 # Path to your pairs file (create this file with your image pairs)
-PAIRS_FILE="pairs.txt"
+PAIRS_FILE="/kaggle/input/nd-twin-256/test_pairs.txt"
 
 # Configuration file
 CONFIG_FILE="configs/softmax_triplet.yml"

@@ -35,8 +35,31 @@ def main():
 
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
 
-    # model
-    model = build_model(cfg, num_classes=cfg.MODEL.NUM_CLASSES if hasattr(cfg.MODEL,'NUM_CLASSES') else 1000)
+    # model - try to infer num_classes from the checkpoint first
+    num_classes = 1000  # default
+    if hasattr(cfg.MODEL, 'NUM_CLASSES'):
+        num_classes = cfg.MODEL.NUM_CLASSES
+    else:
+        # Try to infer from the checkpoint
+        try:
+            temp_sd = torch.load(args.weights, map_location='cpu', weights_only=False)
+            if hasattr(temp_sd, 'module'):
+                temp_sd = temp_sd.module.state_dict()
+            elif isinstance(temp_sd, dict) and 'state_dict' in temp_sd:
+                temp_sd = temp_sd['state_dict']
+            elif isinstance(temp_sd, dict) and 'module' in temp_sd:
+                temp_sd = temp_sd['module']
+            
+            # Look for classifier weight to infer num_classes
+            for key in temp_sd.keys():
+                if 'classifier.weight' in key:
+                    num_classes = temp_sd[key].shape[0]
+                    print(f"Inferred num_classes from checkpoint: {num_classes}")
+                    break
+        except Exception as e:
+            print(f"Could not infer num_classes from checkpoint, using default: {num_classes}")
+    
+    model = build_model(cfg, num_classes=num_classes)
     sd = torch.load(args.weights, map_location='cpu', weights_only=False)
     
     # Handle different types of saved models
@@ -77,12 +100,29 @@ def main():
 
     # read pairs
     pairs = []
-    with open(args.pairs_file, 'r') as f:
-        for line in f:
-            line = line.strip()
-            if not line: continue
-            a, b, y = line.split()
-            pairs.append((a, b, int(y)))
+    try:
+        with open(args.pairs_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line: continue
+                a, b, y = line.split()
+                pairs.append((a, b, int(y)))
+    except UnicodeDecodeError:
+        # Try with different encodings if UTF-8 fails
+        try:
+            with open(args.pairs_file, 'r', encoding='latin-1') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line: continue
+                    a, b, y = line.split()
+                    pairs.append((a, b, int(y)))
+        except UnicodeDecodeError:
+            with open(args.pairs_file, 'r', encoding='cp1252') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line: continue
+                    a, b, y = line.split()
+                    pairs.append((a, b, int(y)))
 
     # cache features per image
     paths = sorted(set([p for a,b,_ in pairs for p in (a,b)]))
