@@ -1,11 +1,14 @@
 import logging
+import os
+import numpy as np
+from PIL import Image
 import torch
 import torch.nn.functional as F
 from ignite.engine import Engine, Events
-from ignite.handlers import ModelCheckpoint, Timer
+from ignite.handlers import Timer
 from ignite.metrics import RunningAverage
 
-from utils.reid_metric import R1_mAP
+from data.transforms import build_transforms
 
 
 def create_supervised_trainer(model, optimizer, loss_fn,using_cal,
@@ -51,41 +54,9 @@ def create_supervised_trainer(model, optimizer, loss_fn,using_cal,
 
 
 def create_supervised_evaluator(model, metrics,
-                                device=None):
-    """
-    Factory function for creating an evaluator for supervised models
-
-    Args:
-        model (`torch.nn.Module`): the model to train
-        metrics (dict of str - :class:`ignite.metrics.Metric`): a map of metric names to Metrics
-        device (str, optional): device type specification (default: None).
-            Applies to both model and batches.
-    Returns:
-        Engine: an evaluator engine with supervised inference function
-    """
-    if device:
-        model.to(device)
-
-    def fliplr(img):
-        inv_idx = torch.arange(img.size(3)-1,-1,-1).long().cuda()  # N x C x H x W
-        img_flip = img.index_select(3,inv_idx)
-        return img_flip
-
-    def _inference(engine, batch):
-        model.eval()
-        with torch.no_grad():
-            data, pids, camids = batch
-            data = data.cuda()
-            feat = model(data)
-            data_f = fliplr(data) 
-            feat_f = model(data_f)
-            feat = feat + feat_f
-            return feat, pids, camids
-
-    engine = Engine(_inference)
-    for name, metric in metrics.items():
-        metric.attach(engine, name)
-    return engine
+                               device=None):
+    # Re-ID evaluator removed; verification is handled separately
+    raise NotImplementedError("Re-ID evaluator removed in favor of verification eval.")
 
 
 def do_train(
@@ -99,23 +70,24 @@ def do_train(
         num_query
 ):
     log_period = cfg.SOLVER.LOG_PERIOD
-    checkpoint_period = cfg.SOLVER.CHECKPOINT_PERIOD
     eval_period = cfg.SOLVER.EVAL_PERIOD
     output_dir = cfg.OUTPUT_DIR
     device = cfg.MODEL.DEVICE
     epochs = cfg.SOLVER.MAX_EPOCHS
     using_cal = cfg.MODEL.CAL
+    verify_enabled = hasattr(cfg, 'VERIFY') and cfg.VERIFY.ENABLE
+    pairs_file = cfg.VERIFY.PAIRS_FILE if verify_enabled else None
+    verify_bs = cfg.VERIFY.BATCH_SIZE if verify_enabled else 128
 
 
     logger = logging.getLogger("reid_baseline.train")
     logger.info("Start training")
 
     trainer = create_supervised_trainer(model, optimizer, loss_fn, using_cal,device=device)
-    evaluator = create_supervised_evaluator(model, metrics={'r1_mAP': R1_mAP(num_query)}, device=device)
-    checkpointer = ModelCheckpoint(output_dir, cfg.MODEL.NAME, n_saved=10, require_empty=False)
     timer = Timer(average=True)
-    to_save = {'model': model, 'optimizer': optimizer}
-    trainer.add_event_handler(Events.EPOCH_COMPLETED, checkpointer, {'model': model, 'optimizer': optimizer})
+    best_verify_acc = 0.0
+    latest_path = os.path.join(output_dir, f"{cfg.MODEL.NAME}_latest.pth")
+    best_path = os.path.join(output_dir, f"{cfg.MODEL.NAME}_best_acc.pth")
     timer.attach(trainer, start=Events.EPOCH_STARTED, resume=Events.ITERATION_STARTED,
                  pause=Events.ITERATION_COMPLETED, step=Events.ITERATION_COMPLETED)
 
@@ -144,15 +116,103 @@ def do_train(
         logger.info('-' * 10)
         timer.reset()
 
+    def _load_img(path, tfm):
+        img = Image.open(path).convert('RGB')
+        return tfm(img).unsqueeze(0)
+
+    def _run_verification(current_model, pairs_txt, batch_size, device_str):
+        if not pairs_txt or not os.path.isfile(pairs_txt):
+            logging.getLogger("reid_baseline.train").warning(f"Pairs file not found: {pairs_txt}")
+            return None
+        module = current_model.module if hasattr(current_model, 'module') else current_model
+        tfm = build_transforms(cfg, is_train=False)
+        pairs = []
+        with open(pairs_txt, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                a, b, y = line.split()
+                pairs.append((a, b, int(y)))
+        if not pairs:
+            return None
+        paths = sorted(set([p for a, b, _ in pairs for p in (a, b)]))
+        feats = {}
+        dev = torch.device(device_str if torch.cuda.is_available() else 'cpu')
+        current_model.eval()
+        with torch.no_grad():
+            batch_imgs, batch_paths = [], []
+            for p in paths:
+                try:
+                    img = _load_img(p, tfm)
+                except Exception:
+                    continue
+                batch_imgs.append(img)
+                batch_paths.append(p)
+                if len(batch_imgs) == batch_size:
+                    x = torch.cat(batch_imgs, 0).to(dev)
+                    f = module.extract_feat(x).cpu().numpy()
+                    for bp, bf in zip(batch_paths, f):
+                        feats[bp] = bf
+                    batch_imgs, batch_paths = [], []
+            if batch_imgs:
+                x = torch.cat(batch_imgs, 0).to(dev)
+                f = module.extract_feat(x).cpu().numpy()
+                for bp, bf in zip(batch_paths, f):
+                    feats[bp] = bf
+        scores, labels = [], []
+        for a, b, y in pairs:
+            if a not in feats or b not in feats:
+                continue
+            fa, fb = feats[a], feats[b]
+            scores.append(float(np.dot(fa, fb)))
+            labels.append(y)
+        if not scores:
+            return None
+        scores = np.array(scores)
+        labels = np.array(labels)
+        from sklearn import metrics as skm
+        fpr, tpr, thr = skm.roc_curve(labels, scores)
+        auc = skm.auc(fpr, tpr)
+        best_thr_idx = np.argmax(tpr - fpr)
+        thr_star = thr[best_thr_idx]
+        preds = (scores >= thr_star).astype(int)
+        acc = (preds == labels).mean()
+        fnr = 1 - tpr
+        eer_idx = np.nanargmin(np.absolute((fnr - fpr)))
+        eer_val = max(fpr[eer_idx], fnr[eer_idx])
+        return {'acc': float(acc), 'auc': float(auc), 'eer': float(eer_val), 'thr': float(thr_star)}
+
     @trainer.on(Events.EPOCH_COMPLETED)
-    def log_validation_results(engine):
-        if ((engine.state.epoch % eval_period == 0) or (engine.state.epoch == epochs)) and (engine.state.epoch > 1.7*epochs):           
-            evaluator.run(val_loader)
-            cmc, mAP = evaluator.state.metrics['r1_mAP']
-            logger.info("Validation Results - Epoch: {}".format(engine.state.epoch))
-            logger.info("mAP: {:.1%}".format(mAP))
-            for r in [1, 5, 10]:
-                logger.info("CMC curve, Rank-{:<3}:{:.1%}".format(r, cmc[r - 1]))
+    def save_latest(engine):
+        try:
+            torch.save(model, latest_path)
+        except Exception as e:
+            logger.warning(f"Failed to save latest model: {e}")
+
+    @trainer.on(Events.EPOCH_COMPLETED)
+    def verify_and_maybe_save_best(engine):
+        epoch = engine.state.epoch
+        if not verify_enabled:
+            return
+        if (epoch % eval_period != 0) and (epoch != epochs):
+            return
+        res = _run_verification(model, pairs_file, verify_bs, device)
+        if res is None:
+            logger.warning("Verification skipped (no pairs or features).")
+            return
+        logger.info("Verification Results - Epoch {} | ACC: {:.4f}, AUC: {:.4f}, EER: {:.4f}, thr*: {:.4f}".format(
+            epoch, res['acc'], res['auc'], res['eer'], res['thr']))
+        print("Verification Results - Epoch {} | ACC: {:.4f}, AUC: {:.4f}, EER: {:.4f}, thr*: {:.4f}".format(
+            epoch, res['acc'], res['auc'], res['eer'], res['thr']))
+        nonlocal best_verify_acc
+        if res['acc'] > best_verify_acc:
+            best_verify_acc = res['acc']
+            try:
+                torch.save(model, best_path)
+                logger.info("New best verification ACC {:.4f}. Saved to {}".format(best_verify_acc, best_path))
+            except Exception as e:
+                logger.warning(f"Failed to save best model: {e}")
 
 
 
