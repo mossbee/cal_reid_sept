@@ -37,7 +37,7 @@ def main():
 
     # model
     model = build_model(cfg, num_classes=cfg.MODEL.NUM_CLASSES if hasattr(cfg.MODEL,'NUM_CLASSES') else 1000)
-    sd = torch.load(args.weights, map_location='cpu')
+    sd = torch.load(args.weights, map_location='cpu', weights_only=False)
     if isinstance(sd, dict) and 'module' in str(type(sd)):  # safe-guard
         sd = sd.module.state_dict()
     if 'state_dict' in sd:  # handle ignite checkpoints
