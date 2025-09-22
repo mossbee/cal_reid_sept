@@ -100,29 +100,48 @@ def main():
 
     # read pairs
     pairs = []
-    try:
-        with open(args.pairs_file, 'r', encoding='utf-8') as f:
-            for line in f:
-                line = line.strip()
-                if not line: continue
-                a, b, y = line.split()
-                pairs.append((a, b, int(y)))
-    except UnicodeDecodeError:
-        # Try with different encodings if UTF-8 fails
+    
+    def read_pairs_file(file_path, encoding):
+        """Helper function to read pairs file with given encoding"""
+        temp_pairs = []
         try:
-            with open(args.pairs_file, 'r', encoding='latin-1') as f:
-                for line in f:
+            with open(file_path, 'r', encoding=encoding) as f:
+                for line_num, line in enumerate(f, 1):
                     line = line.strip()
-                    if not line: continue
-                    a, b, y = line.split()
-                    pairs.append((a, b, int(y)))
-        except UnicodeDecodeError:
-            with open(args.pairs_file, 'r', encoding='cp1252') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line: continue
-                    a, b, y = line.split()
-                    pairs.append((a, b, int(y)))
+                    if not line or line.startswith('#'):  # Skip empty lines and comments
+                        continue
+                    parts = line.split()
+                    if len(parts) != 3:
+                        print(f"Warning: Skipping line {line_num} - expected 3 values, got {len(parts)}: {line}")
+                        continue
+                    try:
+                        a, b, y = parts[0], parts[1], int(parts[2])
+                        temp_pairs.append((a, b, y))
+                    except ValueError as e:
+                        print(f"Warning: Skipping line {line_num} - invalid label: {line}")
+                        continue
+            return temp_pairs, None
+        except UnicodeDecodeError as e:
+            return [], e
+        except Exception as e:
+            return [], e
+    
+    # Try different encodings
+    encodings_to_try = ['utf-8', 'latin-1', 'cp1252', 'iso-8859-1']
+    last_error = None
+    
+    for encoding in encodings_to_try:
+        temp_pairs, error = read_pairs_file(args.pairs_file, encoding)
+        if temp_pairs:
+            pairs = temp_pairs
+            print(f"Successfully read {len(pairs)} pairs using {encoding} encoding")
+            break
+        last_error = error
+    
+    if not pairs:
+        print(f"Error: Could not read pairs file with any encoding. Last error: {last_error}")
+        print("Please check your pairs file format. Each line should contain: image1_path image2_path label")
+        return
 
     # cache features per image
     paths = sorted(set([p for a,b,_ in pairs for p in (a,b)]))
