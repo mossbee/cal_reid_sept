@@ -1,0 +1,8 @@
+# Example pairs file format
+# Each line should contain: image1_path image2_path label
+# label: 1 for same person, 0 for different persons
+
+# Example entries (replace with your actual image paths):
+# /path/to/person1_img1.jpg /path/to/person1_img2.jpg 1
+# /path/to/person1_img1.jpg /path/to/person2_img1.jpg 0
+# /path/to/person2_img1.jpg /path/to/person2_img2.jpg 1

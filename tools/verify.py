@@ -1,7 +1,9 @@
-import argparse, os, torch, numpy as np
+import argparse, os, sys, torch, numpy as np
 from PIL import Image
 from torchvision import transforms
 from sklearn import metrics
+
+sys.path.append('.')
 from config import cfg
 from modeling import build_model
 
