@@ -55,7 +55,7 @@ class CustomModel(BaseImageDataset):
     def _infer_pid_from_path(self, img_path):
         # Parent folder name is PID, e.g., .../90005/90005d1.jpg -> '90005'
         parent = osp.basename(osp.dirname(img_path))
-        if not re.fullmatch(r'\\d{5,}', parent):
+        if not re.fullmatch(r'\d{5,}', parent):
             raise RuntimeError("Parent folder '{}' is not a 5+ digit PID".format(parent))
         return int(parent)
 
