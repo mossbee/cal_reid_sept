@@ -38,17 +38,34 @@ def main():
     # model
     model = build_model(cfg, num_classes=cfg.MODEL.NUM_CLASSES if hasattr(cfg.MODEL,'NUM_CLASSES') else 1000)
     sd = torch.load(args.weights, map_location='cpu', weights_only=False)
-    if isinstance(sd, dict) and 'module' in str(type(sd)):  # safe-guard
+    
+    # Handle different types of saved models
+    if hasattr(sd, 'module'):  # DataParallel model
         sd = sd.module.state_dict()
-    if 'state_dict' in sd:  # handle ignite checkpoints
-        sd = sd['state_dict']
+    elif isinstance(sd, dict):
+        if 'state_dict' in sd:  # handle ignite checkpoints
+            sd = sd['state_dict']
+        elif 'module' in sd:  # another DataParallel format
+            sd = sd['module']
+    else:
+        # Assume it's already a state dict
+        pass
+    
     try:
-        model.load_state_dict(sd if isinstance(sd, dict) else sd.module.state_dict(), strict=False)
-    except:
-        if isinstance(sd, dict):
-            model.load_state_dict(sd, strict=False)
-        else:
-            model.load_state_dict(sd.module.state_dict(), strict=False)
+        model.load_state_dict(sd, strict=False)
+    except Exception as e:
+        print(f"Warning: Failed to load state dict with strict=False: {e}")
+        # Try loading with even more relaxed constraints
+        try:
+            # Extract only the matching keys
+            model_dict = model.state_dict()
+            pretrained_dict = {k: v for k, v in sd.items() if k in model_dict and v.size() == model_dict[k].size()}
+            model_dict.update(pretrained_dict)
+            model.load_state_dict(model_dict)
+            print(f"Loaded {len(pretrained_dict)} matching parameters")
+        except Exception as e2:
+            print(f"Error: Could not load any parameters: {e2}")
+            raise
 
     model.eval().to(device)
     if hasattr(model, 'module'): m = model.module
