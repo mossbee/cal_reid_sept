@@ -90,6 +90,13 @@ class ResNet(nn.Module):
 
     def load_param(self, model_path):
         param_dict = torch.load(model_path, weights_only=False)
+        
+        # Handle DataParallel wrapped models
+        if hasattr(param_dict, 'module'):
+            param_dict = param_dict.module.state_dict()
+        elif isinstance(param_dict, dict) and 'module' in param_dict:
+            param_dict = param_dict['module']
+        
         for i in param_dict:
             if 'fc' in i:
                 continue
