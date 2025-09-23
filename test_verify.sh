@@ -31,3 +31,4 @@ python tools/verify.py \
     --device cuda
 
 echo "Verification completed!"
+

@@ -8,3 +8,4 @@
 /path/to/person2_img1.jpg /path/to/person2_img2.jpg 1
 /path/to/person3_img1.jpg /path/to/person3_img2.jpg 1
 /path/to/person1_img1.jpg /path/to/person3_img1.jpg 0
+

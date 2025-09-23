@@ -5,3 +5,4 @@
 # Replace these with your actual image paths:
 # /path/to/image1.jpg /path/to/image2.jpg 1
 # /path/to/image1.jpg /path/to/image3.jpg 0
+
