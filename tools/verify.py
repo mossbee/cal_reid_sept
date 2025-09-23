@@ -8,6 +8,8 @@ from config import cfg
 from modeling import build_model
 
 def load_img(path, tfm):
+    base_path = '/kaggle/input/nd-twin-256/ND_TWIN_256'
+    path = os.path.join(base_path, path)
     img = Image.open(path).convert('RGB')
     return tfm(img).unsqueeze(0)
 
