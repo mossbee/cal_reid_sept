@@ -35,64 +35,16 @@ def main():
 
     device = torch.device(args.device if torch.cuda.is_available() else 'cpu')
 
-    # model - try to infer num_classes from the checkpoint first
-    num_classes = 1000  # default
-    if hasattr(cfg.MODEL, 'NUM_CLASSES'):
-        num_classes = cfg.MODEL.NUM_CLASSES
-    else:
-        # Try to infer from the checkpoint
-        try:
-            temp_sd = torch.load(args.weights, map_location='cpu', weights_only=False)
-            if hasattr(temp_sd, 'module'):
-                temp_sd = temp_sd.module.state_dict()
-            elif isinstance(temp_sd, dict) and 'state_dict' in temp_sd:
-                temp_sd = temp_sd['state_dict']
-            elif isinstance(temp_sd, dict) and 'module' in temp_sd:
-                temp_sd = temp_sd['module']
-            
-            # Look for classifier weight to infer num_classes
-            for key in temp_sd.keys():
-                if 'classifier.weight' in key:
-                    num_classes = temp_sd[key].shape[0]
-                    print(f"Inferred num_classes from checkpoint: {num_classes}")
-                    break
-        except Exception as e:
-            print(f"Could not infer num_classes from checkpoint, using default: {num_classes}")
+    # Load the saved model directly (it's saved as a complete DataParallel model)
+    print(f"Loading model from: {args.weights}")
+    model = torch.load(args.weights, map_location='cpu', weights_only=False)
     
-    model = build_model(cfg, num_classes=num_classes)
-    sd = torch.load(args.weights, map_location='cpu', weights_only=False)
+    # Handle DataParallel wrapper
+    if hasattr(model, 'module'):
+        model = model.module
     
-    # Handle different types of saved models
-    if hasattr(sd, 'module'):  # DataParallel model
-        sd = sd.module.state_dict()
-    elif isinstance(sd, dict):
-        if 'state_dict' in sd:  # handle ignite checkpoints
-            sd = sd['state_dict']
-        elif 'module' in sd:  # another DataParallel format
-            sd = sd['module']
-    else:
-        # Assume it's already a state dict
-        pass
-    
-    try:
-        model.load_state_dict(sd, strict=False)
-    except Exception as e:
-        print(f"Warning: Failed to load state dict with strict=False: {e}")
-        # Try loading with even more relaxed constraints
-        try:
-            # Extract only the matching keys
-            model_dict = model.state_dict()
-            pretrained_dict = {k: v for k, v in sd.items() if k in model_dict and v.size() == model_dict[k].size()}
-            model_dict.update(pretrained_dict)
-            model.load_state_dict(model_dict)
-            print(f"Loaded {len(pretrained_dict)} matching parameters")
-        except Exception as e2:
-            print(f"Error: Could not load any parameters: {e2}")
-            raise
-
     model.eval().to(device)
-    if hasattr(model, 'module'): m = model.module
-    else: m = model
+    print(f"Model loaded successfully. Using device: {device}")
 
     # transforms: reuse test-time transforms
     from data.transforms import build_transforms
@@ -154,13 +106,13 @@ def main():
             batch_paths.append(p)
             if len(batch_imgs) == args.batch_size:
                 x = torch.cat(batch_imgs, 0).to(device)
-                f = m.extract_feat(x).cpu().numpy()
+                f = model.extract_features(x).cpu().numpy()
                 for bp, bf in zip(batch_paths, f):
                     feats[bp] = bf
                 batch_imgs, batch_paths = [], []
         if batch_imgs:
             x = torch.cat(batch_imgs, 0).to(device)
-            f = m.extract_feat(x).cpu().numpy()
+            f = model.extract_features(x).cpu().numpy()
             for bp, bf in zip(batch_paths, f):
                 feats[bp] = bf
 
