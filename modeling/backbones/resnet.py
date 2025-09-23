@@ -97,10 +97,30 @@ class ResNet(nn.Module):
         elif isinstance(param_dict, dict) and 'module' in param_dict:
             param_dict = param_dict['module']
         
-        for i in param_dict:
-            if 'fc' in i:
+        # Create a mapping from saved keys to current model keys
+        current_state_dict = self.state_dict()
+        
+        for saved_key, saved_value in param_dict.items():
+            if 'fc' in saved_key:
                 continue
-            self.state_dict()[i].copy_(param_dict[i])
+                
+            # Try to find matching key in current model
+            current_key = None
+            
+            # Remove 'base.' prefix if present
+            if saved_key.startswith('base.'):
+                current_key = saved_key[5:]  # Remove 'base.' prefix
+            else:
+                current_key = saved_key
+            
+            # Check if the key exists in current model and shapes match
+            if current_key in current_state_dict:
+                if current_state_dict[current_key].shape == saved_value.shape:
+                    current_state_dict[current_key].copy_(saved_value)
+                else:
+                    print(f"Warning: Shape mismatch for {current_key}: {current_state_dict[current_key].shape} vs {saved_value.shape}")
+            else:
+                print(f"Warning: Key {current_key} not found in current model")
 
     def random_init(self):
         for m in self.modules():
